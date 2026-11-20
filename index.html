@@ -54,6 +54,12 @@
   .note{color:var(--warn);font-size:12px}
   .empty{padding:24px;text-align:center;color:var(--muted);display:none}
   footer{margin-top:40px;color:var(--muted);font-size:12px;text-align:center}
+  .refresh{margin-left:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:5px 12px;cursor:pointer}
+  .refresh:hover{border-color:var(--accent2);color:var(--accent2)}
+  .refresh:disabled{opacity:.6;cursor:wait}
+  .refresh-status{margin-left:8px;font-size:12px}
+  .refresh-status.ok{color:var(--good)} .refresh-status.err{color:var(--warn)}
+  .new-badge{margin-left:6px;font-size:10px;font-weight:700;color:#141414;background:var(--good);border-radius:4px;padding:1px 5px;vertical-align:middle}
   @media(max-width:640px){ .hide-sm{display:none} }
 </style>
 </head>
@@ -61,7 +67,9 @@
 <div class="wrap">
   <header>
     <h1>IMA <span>Landing Page</span> Directory</h1>
-    <div class="updated">Last refreshed: <b id="ts">July 24, 2026</b></div>
+    <div class="updated">Last refreshed: <b id="ts">July 24, 2026</b>
+      <button id="refresh" class="refresh" type="button" title="Pull in pages published since the last weekly refresh">↻ Refresh</button>
+      <span id="refresh-status" class="refresh-status" role="status" aria-live="polite"></span></div>
   </header>
   <div class="stats">
     <div class="stat"><b id="stat-clients">0</b><span>Clients</span></div>
@@ -74,7 +82,7 @@
   </div>
   <div id="groups"></div>
   <div class="empty" id="empty">No landing pages match your search.</div>
-  <footer>Source of truth: <code>ideasmoneyart/ima-landing-pages</code> · Auto-refreshed weekly by Claude · Ideas Money Art</footer>
+  <footer>Source of truth: <code>ideasmoneyart/ima-landing-pages</code> · Auto-refreshed weekly by Claude, or on demand with ↻ Refresh · Ideas Money Art</footer>
 </div>
 
 <script>
@@ -246,7 +254,7 @@ function render(){
               ? `<a href="${url}-thanks" target="_blank" rel="noopener">✓ view</a>`
               : `<span class="none">—</span>`;
             return `<tr>
-              <td class="lp-name">${titleCase(p.slug)}</td>
+              <td class="lp-name">${titleCase(p.slug)}${p.isNew?'<span class="new-badge">NEW</span>':''}</td>
               <td class="path hide-sm">/${p.slug}</td>
               <td class="ty">${ty}</td>
               <td><a class="open" href="${url}" target="_blank" rel="noopener">Open LP ↗</a></td>
@@ -299,6 +307,38 @@ document.getElementById("ts").textContent = new Date(DATA.generated+"T12:00:00")
 document.getElementById("search").addEventListener("input", render);
 buildChips();
 render();
+
+// ---- On-demand refresh: pulls each client LP site's current pages from Netlify ----
+const siteName = c => (c.netlify||"").split("/").pop();
+async function refreshPages(){
+  const btn = document.getElementById("refresh"), st = document.getElementById("refresh-status");
+  btn.disabled = true; st.className = "refresh-status"; st.textContent = "Checking Netlify…";
+  try{
+    const sites = DATA.clients.map(siteName).filter(Boolean).join(",");
+    const res = await fetch("/api/lp-pages?sites=" + encodeURIComponent(sites), {cache:"no-store"});
+    const body = await res.json().catch(()=>({}));
+    if(res.status===429) throw new Error("Too many refreshes, try again in a minute");
+    if(!res.ok) throw new Error(body.error || ("Refresh failed (" + res.status + ")"));
+    let added = 0, failed = [];
+    body.sites.forEach(r=>{
+      const c = DATA.clients.find(x=>siteName(x)===r.site);
+      if(!c) return;
+      if(r.error || !r.pages){ failed.push(c.name); return; }
+      if(!r.pages.length){ return; } // keep what we had rather than blanking a client
+      const before = new Set(c.pages.map(p=>p.slug));
+      c.pages = r.pages.map(p=>({slug:p.slug, thanks:p.thanks, isNew:!before.has(p.slug)}));
+      added += c.pages.filter(p=>p.isNew).length;
+    });
+    document.getElementById("ts").textContent = new Date(body.refreshed).toLocaleString("en-US",{month:"long",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"});
+    render();
+    st.className = "refresh-status " + (failed.length ? "err" : "ok");
+    st.textContent = (added ? added + " new page" + (added!==1?"s":"") + " added" : "Up to date") +
+      (failed.length ? " · couldn't reach " + failed.join(", ") : "");
+  }catch(e){
+    st.className = "refresh-status err"; st.textContent = e.message;
+  }finally{ btn.disabled = false; }
+}
+document.getElementById("refresh").addEventListener("click", refreshPages);
 </script>
 </body>
 </html>
